@@ -1,0 +1,652 @@
+/* Morse Code Trainer — all styling. Palette lives in CSS custom properties. */
+
+:root {
+  color-scheme: dark;
+  --chart-w: 300px;        /* width of the hints drawer */
+
+  --pcb: #0F0F0F;
+  --gold: #C8963E;
+  --gold-dim: #6b5230;
+  --gold-soft: rgba(200, 150, 62, 0.28);
+  --lit: #FFD166;          /* gold accent for UI (values, ON states, dash cue) */
+  --lit-hot: #fff3c4;
+  --led: #3BE36B;          /* pads that light up: LED green */
+  --led-hot: #B9FFCC;      /* commit pulse */
+  --err: #FF6B6B;          /* invalid path: LED red */
+  --trace: #ffffff;
+  --page: #121212;
+  --panel: #161616;
+  --line: #2a2a2a;
+  --text: #e9e4d8;
+  --muted: #8f8877;
+  --red: #d9261c;
+  --red-dark: #9c1a12;
+
+  --pad-transition: 80ms ease;
+  --glow: drop-shadow(0 0 12px var(--led));
+  --font-ui: "Inter", "Segoe UI", system-ui, -apple-system, Helvetica, Arial, sans-serif;
+  --font-mono: ui-monospace, Consolas, "Courier New", monospace;
+  --font-title: "Montserrat", "Inter", "Segoe UI", system-ui, -apple-system, Helvetica, Arial, sans-serif;
+  --radius: 12px;
+}
+
+* { box-sizing: border-box; }
+
+html, body { min-height: 100%; }
+
+body {
+  margin: 0;
+  background: var(--page) radial-gradient(900px 520px at 50% -140px, #27241b 0%, rgba(39, 36, 27, 0) 70%) no-repeat;
+  color: var(--text);
+  font: 14px/1.45 var(--font-ui);
+  -webkit-tap-highlight-color: transparent;
+  transition: padding-left 200ms ease;   /* the hints drawer pushes the page right */
+}
+
+.app {
+  max-width: 940px;
+  min-width: 320px;
+  margin: 0 auto;
+  padding: 18px 16px 40px;
+}
+
+/* ------------------------------------------------------------------ */
+/* Header                                                               */
+/* ------------------------------------------------------------------ */
+
+.app-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px 16px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--line);
+}
+.app-title {
+  margin: 0;
+  font: 700 14px/1.2 var(--font-title);
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--gold);
+}
+
+/* ------------------------------------------------------------------ */
+/* Two-column layout: card left; decoded text + settings right.         */
+/* Stacks into one column when narrow.                                  */
+/* ------------------------------------------------------------------ */
+
+.layout {
+  display: grid;
+  grid-template-columns: minmax(0, 520px) minmax(280px, 360px);
+  grid-template-areas:
+    "card side"
+    "tips side";
+  gap: 16px 20px;
+  justify-content: center;
+}
+.stage { grid-area: card; min-width: 0; align-self: start; }
+.tips-strip { grid-area: tips; align-self: end; }
+.side {
+  grid-area: side;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+/* Settings stretches so both columns end on the same line; the few spare
+   pixels are shared evenly between its sections rather than left at the bottom. */
+.side .settings { flex: 1 1 auto; display: flex; flex-direction: column; }
+.side .settings .panel-section { flex: 1 1 auto; display: flex; flex-direction: column; justify-content: center; }
+
+@media (max-width: 860px) {
+  .layout {
+    grid-template-columns: minmax(0, 480px);
+    grid-template-areas: "card" "side" "tips";
+  }
+  .side .settings { flex: none; }
+  .side .settings .panel-section { flex: none; }
+}
+
+/* shared panel chrome for the Decoded and Settings blocks */
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 16px;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.35);
+}
+.panel-title {
+  margin: 0 0 8px;
+  font: 700 12px/1.2 var(--font-title);
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--gold);
+}
+
+/* ------------------------------------------------------------------ */
+/* Card                                                                 */
+/* ------------------------------------------------------------------ */
+
+.card {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 660 / 900;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: manipulation;
+  font-family: var(--font-title);
+  filter: drop-shadow(0 14px 30px rgba(0, 0, 0, 0.55));
+  transition: filter 300ms ease;
+}
+
+.card .frame-gold { fill: var(--gold); }
+.card .frame-pcb  { fill: var(--pcb); }
+
+.card .lanyard .ring { fill: var(--pcb); stroke: var(--gold); stroke-width: 5; }
+.card .lanyard .hole { fill: var(--page); }
+
+.card .title text {
+  fill: var(--gold);
+  font-size: 52px;
+  font-weight: 800;
+  letter-spacing: 1px;
+}
+
+.card .traces line {
+  stroke: var(--trace);
+  stroke-width: 5;
+  stroke-linecap: butt;
+}
+
+/* root icon */
+.card .root .dish { fill: var(--pcb); stroke: var(--trace); stroke-width: 5; stroke-linejoin: round; }
+.card .root .mast, .card .root .bar { stroke: var(--trace); stroke-width: 5; stroke-linecap: round; }
+.card .root.pulse .dish,
+.card .root.pulse .mast,
+.card .root.pulse .bar { animation: root-pulse 250ms ease-out 1; }
+
+/* pads */
+.card .pad { cursor: pointer; outline: none; }
+.card .pad .shape {
+  fill: var(--gold);
+  stroke: var(--trace);
+  stroke-width: 5;
+  transition: fill var(--pad-transition), filter var(--pad-transition);
+}
+.card .pad.lit .shape {
+  fill: var(--led);
+  filter: var(--glow);
+}
+.card .pad.pulse .shape { animation: pad-pulse 200ms ease-out 1; }
+.card .pad.err .shape   { animation: pad-err 200ms ease-in-out 2; }
+
+.card .pad:focus-visible .shape { stroke: var(--lit); stroke-dasharray: 6 4; }
+
+.card .pad .label {
+  fill: var(--gold);
+  font-size: 28px;
+  font-weight: 700;
+  pointer-events: none;
+}
+.card .pad .hint {
+  fill: var(--gold);
+  opacity: 0.8;
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  pointer-events: none;
+  font-family: var(--font-mono);
+}
+.card.hints-off .pad .hint { display: none; }
+
+/* key */
+.card .key { cursor: pointer; outline: none; touch-action: none; -webkit-touch-callout: none; }
+.card .key .wave { fill: none; stroke: var(--trace); stroke-width: 5; stroke-linecap: round; transition: stroke 60ms ease, filter 60ms ease; }
+.card .key .base { fill: url(#metal); stroke: #3a3d42; stroke-width: 2; }
+.card .key .base-inner { fill: none; stroke: #4d5158; stroke-width: 2; }
+.card .key .cap-shadow { fill: #3a0a07; }
+.card .key .cap { fill: url(#cap-grad); stroke: var(--red-dark); stroke-width: 2; transition: transform 40ms ease, filter 40ms ease; }
+.card .key .cap-hi { fill: rgba(255, 255, 255, 0.35); pointer-events: none; transition: transform 40ms ease; }
+.card .key.pressed .cap, .card .key.pressed .cap-hi { transform: translateY(2px); }
+.card .key.pressed .cap { filter: brightness(0.7); }
+.card .key:focus-visible .base { stroke: var(--lit); stroke-width: 3; }
+
+/* live hold feedback: dot phase is neutral, dash phase lights the arcs LED green */
+.card .key.hold-dash .wave { stroke: var(--led); filter: drop-shadow(0 0 8px var(--led)); }
+.card .key.hold-dash .base { stroke: var(--led); stroke-width: 4; }
+.card .key.hold-dash .cap { filter: brightness(0.7) drop-shadow(0 0 10px var(--led)); }
+
+/* power off: everything grey, key inert */
+.card.off { filter: grayscale(0.7) brightness(0.55) drop-shadow(0 14px 30px rgba(0, 0, 0, 0.55)); }
+.card.off .pad, .card.off .key { cursor: default; }
+.card.off .pad .shape { fill: var(--gold-dim); filter: none; }
+
+/* busy = playback / reference mode: pads are not tappable */
+.card.busy .pad { cursor: default; }
+
+@keyframes pad-pulse {
+  0%   { fill: var(--led);     filter: drop-shadow(0 0 12px var(--led)); }
+  40%  { fill: var(--led-hot); filter: drop-shadow(0 0 22px var(--led-hot)); }
+  100% { fill: var(--led);     filter: drop-shadow(0 0 12px var(--led)); }
+}
+@keyframes pad-err {
+  0%, 100% { fill: var(--led); filter: drop-shadow(0 0 12px var(--led)); }
+  50%      { fill: var(--err); filter: drop-shadow(0 0 12px var(--err)); }
+}
+@keyframes root-pulse {
+  0%   { stroke: var(--trace); }
+  40%  { stroke: var(--lit-hot); filter: drop-shadow(0 0 10px var(--lit)); }
+  100% { stroke: var(--trace); }
+}
+
+/* ------------------------------------------------------------------ */
+/* Decoded block: live readout + decoded text strip + transport bar     */
+/* ------------------------------------------------------------------ */
+
+.decoded {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.decoded .panel-title { margin-bottom: 0; }
+
+.live {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-height: 28px;
+  padding: 0 4px;
+  color: var(--gold);
+  font: 700 20px/1.2 var(--font-mono);
+  letter-spacing: 0.18em;
+  white-space: pre;
+  overflow: hidden;
+}
+.live .live-hint {
+  color: var(--muted);
+  font: 400 12px/1.4 var(--font-ui);
+  letter-spacing: 0.06em;
+  white-space: pre-wrap;
+}
+.live .live-hold { display: inline-block; opacity: 0.55; }
+.live .live-hold.dot { animation: live-blink 500ms ease-in-out infinite alternate; }
+.live .live-hold.dash {
+  opacity: 1;
+  color: var(--led);
+  text-shadow: 0 0 10px var(--led);
+  animation: live-pop 160ms ease-out 1;
+}
+.live .live-commit { color: var(--lit); }
+
+@keyframes live-blink { from { opacity: 0.35; } to { opacity: 0.85; } }
+@keyframes live-pop { from { transform: scale(1.7); } to { transform: scale(1); } }
+
+.strip {
+  min-height: 74px;              /* two lines of the 40-char buffer at this width */
+  padding: 12px 14px;
+  border: 1px solid var(--gold);
+  border-radius: 10px;
+  background: var(--pcb);
+  box-shadow: inset 0 0 0 1px rgba(200, 150, 62, 0.15), inset 0 2px 12px rgba(0, 0, 0, 0.6);
+  color: var(--lit);
+  font: 700 18px/1.35 var(--font-mono);
+  letter-spacing: 0.12em;
+  white-space: pre-wrap;
+  word-break: break-all;
+  overflow: hidden;
+}
+.strip:empty::before {
+  content: "decoded text appears here";
+  color: var(--muted);
+  font-weight: 400;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+/* ------------------------------------------------------------------ */
+/* Transport bar: REC · PLAY / DEL · CLEAR (2 × 2 under the strip)      */
+/* ------------------------------------------------------------------ */
+
+.transport {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 4px;
+}
+.transport .btn { min-width: 0; }
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 42px;
+  padding: 0 14px;
+  border: 1px solid var(--gold);
+  border-radius: 8px;
+  background: linear-gradient(#181818, #0f0f0f);
+  color: var(--gold);
+  font: 700 12px/1 var(--font-ui);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 100ms ease, color 100ms ease, border-color 100ms ease, box-shadow 100ms ease;
+}
+.btn:hover:not(:disabled) { background: #221b0e; box-shadow: inset 0 0 0 1px var(--gold-soft); }
+.btn:active:not(:disabled) { background: var(--gold); color: var(--pcb); }
+.btn:disabled { opacity: 0.35; cursor: default; }
+.btn:focus-visible { outline: 2px solid var(--lit); outline-offset: 2px; }
+
+.btn.wide { display: flex; width: 100%; margin-top: 8px; }
+
+.btn.play::before { content: "▶"; font-size: 10px; }
+.btn.play.stop::before { content: "■"; font-size: 11px; }
+.btn.play.stop { border-color: var(--lit); color: var(--lit); }
+
+.btn .led {
+  width: 10px; height: 10px;
+  border-radius: 50%;
+  background: #3a1210;
+  border: 1px solid #5a1a16;
+  flex: none;
+  transition: background 100ms ease, box-shadow 100ms ease;
+}
+.btn.rec[aria-pressed="true"] { border-color: var(--err); color: var(--err); }
+.btn.rec[aria-pressed="true"] .led {
+  background: var(--red);
+  box-shadow: 0 0 8px var(--red);
+  animation: rec-blink 1s steps(2, start) infinite;
+}
+@keyframes rec-blink { to { visibility: hidden; } }
+
+/* ------------------------------------------------------------------ */
+/* Settings panel                                                       */
+/* ------------------------------------------------------------------ */
+
+.settings { padding-bottom: 6px; }
+.panel-section {
+  padding: 12px 0;
+  border-top: 1px solid var(--line);
+}
+.panel-title + .panel-section { border-top: 0; }
+.section-title {
+  margin: 0 0 6px;
+  font: 600 11px/1.2 var(--font-ui);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* slide switch with ON / OFF readout */
+.switch {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 0;
+  cursor: pointer;
+  position: relative;
+}
+.switch input {
+  position: absolute;
+  opacity: 0;
+  width: 1px; height: 1px;
+  margin: 0;
+}
+.switch .name {
+  flex: 1;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text);
+}
+.switch .track {
+  position: relative;
+  flex: none;
+  width: 42px; height: 22px;
+  border: 1px solid var(--gold);
+  border-radius: 4px;
+  background: var(--pcb);
+  transition: background 120ms ease;
+}
+.switch .knob {
+  position: absolute;
+  top: 3px; left: 3px;
+  width: 16px; height: 14px;
+  background: var(--gold);
+  border-radius: 2px;
+  transition: transform 120ms ease, background 120ms ease;
+}
+.switch input:checked ~ .track { background: #2a2210; }
+.switch input:checked ~ .track .knob { transform: translateX(18px); background: var(--lit); }
+.switch .state {
+  width: 3ch;
+  text-align: right;
+  font: 700 11px/1 var(--font-mono);
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+.switch .state::after { content: "OFF"; }
+.switch input:checked ~ .state { color: var(--lit); }
+.switch input:checked ~ .state::after { content: "ON"; }
+.switch input:focus-visible ~ .track { outline: 2px solid var(--lit); outline-offset: 2px; }
+.switch:hover .track { border-color: var(--lit); }
+
+/* sliders with a filled track (--pct is set by controls.js) */
+.slider { display: block; padding: 6px 0 4px; }
+.slider .slider-head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-bottom: 2px;
+}
+.slider .name {
+  flex: 1;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.slider output { font: 700 13px/1 var(--font-mono); color: var(--lit); }
+.slider .unit { font: 500 11px/1 var(--font-mono); color: var(--muted); }
+.slider .unit output { font-size: 11px; }
+.slider .slider-scale {
+  display: flex;
+  justify-content: space-between;
+  margin-top: -2px;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.slider input[type="range"] {
+  --pct: 50%;
+  -webkit-appearance: none;
+  appearance: none;
+  display: block;
+  width: 100%;
+  height: 26px;
+  margin: 0;
+  background: transparent;
+  cursor: pointer;
+}
+.slider input[type="range"]::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 2px;
+  background: linear-gradient(to right, var(--gold) var(--pct), #343434 var(--pct));
+}
+.slider input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 18px; height: 18px;
+  margin-top: -7px;
+  border-radius: 50%;
+  background: var(--gold);
+  border: 3px solid var(--pcb);
+  box-shadow: 0 0 0 1px var(--gold);
+  transition: box-shadow 100ms ease;
+}
+.slider input[type="range"]::-moz-range-track {
+  height: 4px;
+  border-radius: 2px;
+  background: linear-gradient(to right, var(--gold) var(--pct), #343434 var(--pct));
+}
+.slider input[type="range"]::-moz-range-thumb {
+  width: 12px; height: 12px;
+  border-radius: 50%;
+  background: var(--gold);
+  border: 3px solid var(--pcb);
+  box-shadow: 0 0 0 1px var(--gold);
+}
+.slider input[type="range"]:hover::-webkit-slider-thumb { box-shadow: 0 0 0 2px var(--lit); }
+.slider input[type="range"]:focus-visible { outline: none; }
+.slider input[type="range"]:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 3px var(--lit); }
+.slider input[type="range"]:focus-visible::-moz-range-thumb { box-shadow: 0 0 0 3px var(--lit); }
+
+/* tips strip under the card */
+.tips-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 18px;
+  padding: 10px 14px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.tips-strip .tip { white-space: nowrap; }
+.tips-strip b { color: var(--text); font-weight: 600; }
+kbd {
+  font: 600 11px/1 var(--font-mono);
+  padding: 1px 5px;
+  border: 1px solid var(--muted);
+  border-bottom-width: 2px;
+  border-radius: 3px;
+  color: var(--text);
+  background: var(--pcb);
+}
+
+/* ------------------------------------------------------------------ */
+/* Hints drawer: Morse code chart docked on the LEFT, non-modal.        */
+/* Wide screens: the page is pushed right so the card stays in view.    */
+/* Narrow screens: it overlays with a scrim.                            */
+/* ------------------------------------------------------------------ */
+
+body.chart-open { padding-left: var(--chart-w); }
+
+.chart-drawer {
+  position: fixed;
+  top: 0; left: 0; bottom: 0;
+  z-index: 30;
+  width: var(--chart-w);
+  overflow-y: auto;
+  padding: 14px 14px 24px;
+  background: var(--panel);
+  border-right: 1px solid var(--line);
+  box-shadow: 8px 0 30px rgba(0, 0, 0, 0.45);
+  transition: transform 200ms ease, visibility 200ms;
+}
+.chart-drawer:not(.open) { transform: translateX(-100%); visibility: hidden; }
+
+.chart-scrim { display: none; }
+
+.chart-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+.chart-head .panel-title { margin: 0; }
+.chart-close {
+  width: 32px; height: 32px;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: transparent;
+  color: var(--muted);
+  font: 400 22px/1 var(--font-ui);
+  cursor: pointer;
+}
+.chart-close:hover { border-color: var(--gold); color: var(--gold); }
+.chart-close:focus-visible { outline: 2px solid var(--lit); outline-offset: 2px; }
+
+.chart-rules {
+  margin: 0 0 6px;
+  padding-left: 1.2em;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.chart-rules b, .chart-note b { color: var(--text); font-weight: 600; }
+.chart-note { margin: 0 0 12px; color: var(--muted); font-size: 12px; }
+
+.chart-drawer .section-title { margin: 10px 0 4px; display: flex; align-items: center; gap: 8px; }
+
+/* small status pill, e.g. "not on the card yet" beside the Digits heading */
+.tag {
+  display: inline-block;
+  padding: 2px 7px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font: 600 9px/1.4 var(--font-ui);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.chart-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0 10px;
+}
+.chart-list { list-style: none; margin: 0; padding: 0; }
+.chart-list li { display: flex; align-items: center; gap: 6px; height: 26px; }
+.chart-sym {
+  width: 14px;
+  flex: none;
+  font: 700 14px/1 var(--font-title);
+  color: var(--gold);
+}
+.chart-code { display: inline-flex; align-items: center; gap: 3px; }
+.chart-code i { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--gold); }
+.chart-code i.dash { width: 18px; border-radius: 2px; }
+
+@media (max-width: 760px) {
+  body.chart-open { padding-left: 0; }                    /* overlay instead of push */
+  .chart-drawer { width: min(var(--chart-w), 88vw); }
+  .chart-scrim {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 25;
+    background: rgba(0, 0, 0, 0.55);
+  }
+  .chart-scrim[hidden] { display: none; }
+}
+
+/* ------------------------------------------------------------------ */
+/* Reduced motion: keep every state change, drop the glow animations    */
+/* ------------------------------------------------------------------ */
+
+@media (prefers-reduced-motion: reduce) {
+  .card .pad .shape, .card .key .cap, .card .key .cap-hi, .card .key .wave, .card,
+  .switch .track, .switch .knob, .btn { transition: none; }
+  .card .pad.lit .shape { filter: none; }
+  .card .pad.pulse .shape { animation: none; fill: var(--led-hot); }
+  .card .pad.err .shape { animation: none; fill: var(--err); filter: none; }
+  .card .root.pulse .dish, .card .root.pulse .mast, .card .root.pulse .bar { animation: none; stroke: var(--lit-hot); }
+  .card .key.hold-dash .wave, .card .key.hold-dash .cap { filter: none; }
+  .btn.rec[aria-pressed="true"] .led { animation: none; }
+  .live .live-hold.dot, .live .live-hold.dash { animation: none; }
+  .live .live-hold.dash { text-shadow: none; }
+  body, .chart-drawer { transition: none; }
+}
+
+@media (max-width: 360px) {
+  .app { padding: 10px 8px 24px; }
+  .strip { font-size: 16px; }
+  .btn { padding: 0 8px; letter-spacing: 0.1em; }
+}

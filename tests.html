@@ -1,0 +1,643 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Morse Card — decoder tests</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; padding: 24px 16px; font: 14px/1.5 ui-monospace, Consolas, Menlo, monospace;
+         background: #0f0f0f; color: #e8e8e8; }
+  h1 { font-size: 18px; margin: 0 0 12px; color: #c8963e; letter-spacing: .08em; }
+  #banner { padding: 12px 16px; border-radius: 8px; font-weight: 700; font-size: 16px; margin-bottom: 16px;
+            background: #444; }
+  #banner.pass { background: #1f6f3a; color: #fff; }
+  #banner.fail { background: #8a2a2a; color: #fff; }
+  table { border-collapse: collapse; width: 100%; max-width: 900px; }
+  td { padding: 4px 8px; border-bottom: 1px solid #222; vertical-align: top; }
+  td.status { width: 5em; font-weight: 700; }
+  tr.pass td.status { color: #4ade80; }
+  tr.fail td.status { color: #ff6b6b; }
+  tr.fail td.name { color: #ffb3b3; }
+  td.detail { color: #999; white-space: pre-wrap; }
+  .group td { padding-top: 14px; color: #c8963e; font-weight: 700; border-bottom: 1px solid #c8963e44; }
+  p.note { color: #888; max-width: 900px; }
+</style>
+</head>
+<body>
+<h1>MORSE CARD — DECODER TESTS</h1>
+<div id="banner">Running…</div>
+<table><tbody id="rows"></tbody></table>
+<p class="note">Pure-JS assertions against <code>js/morse/tree.js</code>, <code>timing.js</code> and
+<code>decoder.js</code>. No runner. If this page is blank, it was opened via <code>file://</code> —
+serve it instead (see README).</p>
+
+<script type="module">
+"use strict";
+import { TABLE, root, LETTERS, step, nodeForPath, letterForPath, pathForLetter, padsForPath, spokenPath, glyphPath }
+  from "./js/morse/tree.js";
+import { thresholds, symbolFor, clampT, clampDashRatio, pressesForPath, DEFAULT_T, MIN_T, MAX_T, DEBOUNCE_MS, ERROR_FLASH_MS,
+         DEFAULT_DASH_RATIO, MIN_DASH_RATIO, MAX_DASH_RATIO }
+  from "./js/morse/timing.js";
+import { createState, reduce, nextDeadline, recordPress, isValidRecording, MAX_RECORD_MS, MAX_PRESSES }
+  from "./js/morse/decoder.js";
+import { createStrip } from "./js/ui/strip.js";
+import { LETTERS as CHART_LETTERS, DIGITS } from "./js/morse/chart.js";
+
+/* ---------- tiny harness ---------- */
+const rows = document.getElementById("rows");
+const banner = document.getElementById("banner");
+let passed = 0, failed = 0;
+
+function group(name) {
+  const tr = document.createElement("tr");
+  tr.className = "group";
+  const td = document.createElement("td");
+  td.colSpan = 3;
+  td.textContent = name;
+  tr.appendChild(td);
+  rows.appendChild(tr);
+}
+
+function report(ok, name, detail) {
+  const tr = document.createElement("tr");
+  tr.className = ok ? "pass" : "fail";
+  const s = document.createElement("td"); s.className = "status"; s.textContent = ok ? "PASS" : "FAIL";
+  const n = document.createElement("td"); n.className = "name"; n.textContent = name;
+  const d = document.createElement("td"); d.className = "detail"; d.textContent = detail || "";
+  tr.append(s, n, d);
+  rows.appendChild(tr);
+  if (ok) passed++; else failed++;
+}
+
+function test(name, fn) {
+  try {
+    fn();
+    report(true, name);
+  } catch (e) {
+    report(false, name, e && e.message ? e.message : String(e));
+  }
+}
+
+function fmt(v) { return JSON.stringify(v); }
+function eq(actual, expected, msg) {
+  const a = fmt(actual), e = fmt(expected);
+  if (a !== e) throw new Error((msg ? msg + ": " : "") + "expected " + e + ", got " + a);
+}
+function ok(cond, msg) { if (!cond) throw new Error(msg || "expected truthy"); }
+
+/* ---------- decoder helpers ---------- */
+const T = DEFAULT_T;   // 150
+const th = thresholds(T);
+
+/** Apply a list of events, collecting every effect. Optional T and dash ratio. */
+function run(state, events, t, ratio) {
+  const fxAll = [];
+  let out = { state: state, effects: [], deadline: nextDeadline(state, t || T, ratio) };
+  for (const ev of events) {
+    out = reduce(out.state, ev, t || T, ratio);
+    for (const f of out.effects) fxAll.push(f);
+  }
+  return { state: out.state, effects: fxAll, deadline: out.deadline };
+}
+function press(downAt, upAt) {
+  return [{ type: "keyDown", t: downAt }, { type: "keyUp", t: upAt }];
+}
+function types(fx) { return fx.map(f => f.type); }
+function find(fx, type) { return fx.filter(f => f.type === type); }
+
+/* ================================================================== */
+group("Tree (§4.1) — topology and the Y/V correction (§3.3)");
+
+test("exactly 26 letters, A–Z, none duplicated", () => {
+  eq(LETTERS.length, 26);
+  eq(LETTERS.join(""), "ABCDEFGHIJKLMNOPQRSTUVWXYZ");
+  const seen = new Set(Object.values(TABLE));
+  eq(seen.size, 26, "table has duplicate letters");
+});
+
+test("every table path round-trips: letter -> path -> letter", () => {
+  for (const L of LETTERS) {
+    const p = pathForLetter(L);
+    ok(p, "no path for " + L);
+    eq(letterForPath(p), L, "round trip " + L);
+  }
+});
+
+test("root has no letter and has both children", () => {
+  eq(root.letter, null);
+  eq(root.padId, "root");
+  ok(root.dot && root.dash);
+});
+
+test("Y is -.-- and lives on the LEFT (dash) branch", () => {
+  eq(pathForLetter("Y"), "-.--");
+  eq(letterForPath("-.--"), "Y");
+  eq(padsForPath("-.--"), ["T", "N", "K", "Y"]);
+});
+
+test("V is ...- and lives on the RIGHT (dot) branch", () => {
+  eq(pathForLetter("V"), "...-");
+  eq(letterForPath("...-"), "V");
+  eq(padsForPath("...-"), ["E", "I", "S", "V"]);
+});
+
+test("chains: O lights T,M,O and H lights E,I,S,H", () => {
+  eq(padsForPath("---"), ["T", "M", "O"]);
+  eq(padsForPath("...."), ["E", "I", "S", "H"]);
+});
+
+test("every letter is reachable step-by-step and ends on its own pad", () => {
+  for (const L of LETTERS) {
+    const p = pathForLetter(L);
+    let node = root;
+    for (const c of p) { node = step(node, c); ok(node, "dead step in " + L); }
+    eq(node.letter, L);
+    eq(node.padId, L);
+    const pads = padsForPath(p);
+    eq(pads.length, p.length, "pad count " + L);
+    eq(pads[pads.length - 1], L, "last pad " + L);
+  }
+});
+
+test("invalid paths return null: ----, ....., ..--, .---., empty stays root", () => {
+  eq(nodeForPath("----"), null);
+  eq(nodeForPath("....."), null);
+  eq(nodeForPath("..--"), null);
+  eq(nodeForPath(".---."), null);
+  eq(letterForPath("----"), null);
+  ok(nodeForPath("") === root);
+});
+
+test("step() rejects unknown symbols and null nodes", () => {
+  eq(step(root, "x"), null);
+  eq(step(null, "."), null);
+});
+
+test("spokenPath / glyphPath", () => {
+  eq(spokenPath(".-"), "dot dash");
+  eq(glyphPath("-.--"), "–·––");
+});
+
+/* ================================================================== */
+group("Timing (§5.1, §5.3, §5.7)");
+
+test("defaults and range: T=150, 60..300", () => {
+  eq(DEFAULT_T, 150); eq(MIN_T, 60); eq(MAX_T, 300); eq(DEBOUNCE_MS, 20); eq(ERROR_FLASH_MS, 400);
+});
+
+test("thresholds scale with T", () => {
+  eq(thresholds(150), { dashMin: 300, commitGap: 450, wordGap: 1050, hold: 150, dotMs: 150, dashMs: 450, gapMs: 150 });
+  eq(thresholds(100).dashMin, 200);
+});
+
+test("dot/dash threshold is exactly 2T", () => {
+  eq(symbolFor(299, 150), ".");
+  eq(symbolFor(300, 150), "-");
+  eq(symbolFor(119, 60), ".");
+  eq(symbolFor(120, 60), "-");
+});
+
+test("clampT clamps and falls back", () => {
+  eq(clampT(10), 60); eq(clampT(999), 300); eq(clampT("abc"), 150); eq(clampT(200.4), 200);
+});
+
+test("pressesForPath uses dot=T, dash=3T, gap=T", () => {
+  eq(pressesForPath(".-", 100), [{ downAt: 0, upAt: 100 }, { downAt: 200, upAt: 500 }]);
+  eq(pressesForPath("", 100), []);
+});
+
+/* ================================================================== */
+group("Decoder (§5.1–5.3, §6) — keying");
+
+test("initial state is IDLE, powered, empty path, no deadline", () => {
+  const s = createState();
+  eq(s.mode, "IDLE"); eq(s.powered, true); eq(s.path, "");
+  eq(nextDeadline(s, T), null);
+});
+
+test("keyDown emits rootPulse + toneOn, enters KEY_HELD and arms the dash-threshold deadline", () => {
+  const r = reduce(createState(), { type: "keyDown", t: 0 }, T);
+  eq(types(r.effects), ["rootPulse", "toneOn"]);
+  eq(r.state.mode, "KEY_HELD");
+  eq(r.deadline, { kind: "dashReached", at: th.dashMin });
+});
+
+test("short press (< 2T) is a dot -> E lit", () => {
+  const r = run(createState(), press(0, 100));
+  eq(find(r.effects, "lightPath"), [{ type: "lightPath", pads: ["E"] }]);
+  eq(r.state.mode, "SYMBOL_ENTERED");
+  eq(r.state.path, ".");
+  ok(types(r.effects).includes("toneOff"));
+});
+
+test("long press (>= 2T) is a dash -> T lit", () => {
+  const r = run(createState(), press(0, 300));
+  eq(find(r.effects, "lightPath"), [{ type: "lightPath", pads: ["T"] }]);
+  eq(r.state.path, "-");
+});
+
+test("threshold boundary inside the decoder: 299 ms dot, 300 ms dash", () => {
+  eq(run(createState(), press(0, 299)).state.path, ".");
+  eq(run(createState(), press(0, 300)).state.path, "-");
+});
+
+test("press shorter than 20 ms is debounced: no symbol, state restored", () => {
+  const r = run(createState(), press(0, 10));
+  eq(find(r.effects, "lightPath"), []);
+  eq(r.state.mode, "IDLE");
+  eq(r.state.path, "");
+  eq(r.deadline, null);
+  ok(types(r.effects).includes("toneOff"), "tone must still stop");
+  // mid-letter debounce keeps the path
+  const r2 = run(createState(), [...press(0, 100), ...press(200, 210)]);
+  eq(r2.state.mode, "SYMBOL_ENTERED");
+  eq(r2.state.path, ".");
+});
+
+test("after a symbol the commit deadline is lastUp + 3T", () => {
+  const r = run(createState(), press(0, 100));
+  eq(r.deadline, { kind: "commit", at: 100 + th.commitGap });
+});
+
+test("second symbol extends the path; previously lit pads stay lit; no second rootPulse", () => {
+  const r = run(createState(), [...press(0, 100), ...press(250, 600)]);
+  eq(find(r.effects, "rootPulse").length, 1);
+  eq(find(r.effects, "lightPath").pop(), { type: "lightPath", pads: ["E", "A"] });
+  eq(r.state.path, ".-");
+});
+
+test("keyDown while KEY_HELD is ignored (no double tone)", () => {
+  const r = run(createState(), [{ type: "keyDown", t: 0 }, { type: "keyDown", t: 5 }]);
+  eq(find(r.effects, "toneOn").length, 1);
+  eq(r.state.downAt, 0);
+});
+
+test("keyUp without keyDown is ignored", () => {
+  const r = reduce(createState(), { type: "keyUp", t: 50 }, T);
+  eq(r.effects, []);
+  eq(r.state.mode, "IDLE");
+});
+
+/* ================================================================== */
+group("Decoder — commit gap, hold, word gap (§5.3)");
+
+test("acceptance #2: '. -' commits A after 3T of silence, holds 1T, then clears", () => {
+  let r = run(createState(), [...press(0, 100), ...press(250, 600)]);
+  eq(r.deadline, { kind: "commit", at: 600 + 450 });
+
+  // A tick just before the gap does nothing but re-arm.
+  r = run(r.state, [{ type: "tick", t: 1049 }]);
+  eq(r.effects, []);
+  eq(r.state.mode, "SYMBOL_ENTERED");
+  eq(r.deadline, { kind: "commit", at: 1050 });
+
+  // At 3T: commit.
+  r = run(r.state, [{ type: "tick", t: 1050 }]);
+  eq(r.effects, [{ type: "commit", letter: "A", padId: "A" }]);
+  eq(r.state.mode, "LETTER_COMMITTED");
+  eq(r.state.lastCommitAt, 1050);
+  eq(r.deadline, { kind: "clear", at: 1050 + th.hold });
+
+  // 1T later: clear, back to IDLE, space pending at commit + 7T.
+  r = run(r.state, [{ type: "tick", t: 1200 }]);
+  eq(r.effects, [{ type: "clearPads" }]);
+  eq(r.state.mode, "IDLE");
+  eq(r.state.path, "");
+  eq(r.deadline, { kind: "space", at: 1050 + th.wordGap });
+});
+
+test("silence >= 7T after a commit inserts exactly one space", () => {
+  let r = run(createState(), [...press(0, 100), { type: "tick", t: 550 }, { type: "tick", t: 700 }]);
+  eq(r.state.mode, "IDLE");
+  eq(r.deadline, { kind: "space", at: 550 + 1050 });
+  r = run(r.state, [{ type: "tick", t: 1600 }]);
+  eq(r.effects, [{ type: "space" }]);
+  eq(r.state.spaced, true);
+  eq(r.deadline, null, "nothing more to wait for");
+  r = run(r.state, [{ type: "tick", t: 5000 }]);
+  eq(r.effects, [], "no second space");
+});
+
+test("keying again before 7T cancels the pending space", () => {
+  let r = run(createState(), [...press(0, 100), { type: "tick", t: 550 }, { type: "tick", t: 700 }]);
+  eq(r.deadline.kind, "space");
+  r = run(r.state, [{ type: "keyDown", t: 900 }]);
+  eq(r.state.spaced, true);
+  eq(r.deadline, { kind: "dashReached", at: 900 + th.dashMin }, "only the hold feedback is pending now");
+  r = run(r.state, [{ type: "keyUp", t: 1000 }, { type: "tick", t: 1450 }, { type: "tick", t: 1600 }]);
+  eq(find(r.effects, "space"), []);
+  eq(r.deadline, { kind: "space", at: 1450 + 1050 }, "space now measured from the NEW commit");
+});
+
+test("keyDown during the 1T hold clears the old path and starts fresh", () => {
+  let r = run(createState(), [...press(0, 100), { type: "tick", t: 550 }]);
+  eq(r.state.mode, "LETTER_COMMITTED");
+  r = run(r.state, [{ type: "keyDown", t: 600 }]);
+  eq(types(r.effects), ["clearPads", "rootPulse", "toneOn"]);
+  eq(r.state.path, "");
+  r = run(r.state, [{ type: "keyUp", t: 1000 }]);
+  eq(r.state.path, "-");
+});
+
+test("changing T mid-letter re-derives the deadline with the new T (retime)", () => {
+  let r = run(createState(), press(0, 100));
+  eq(r.deadline.at, 100 + 450);
+  r = reduce(r.state, { type: "retime", t: 100 }, 100);
+  eq(r.effects, []);
+  eq(r.deadline, { kind: "commit", at: 100 + 300 });
+  // and an early tick under the old T is harmless
+  r = reduce(r.state, { type: "tick", t: 350 }, 150);
+  eq(r.effects, []);
+  eq(r.deadline, { kind: "commit", at: 550 });
+});
+
+/* ================================================================== */
+group("Decoder — invalid paths (§5.2, acceptance #3)");
+
+test("acceptance #3: '- - - -' flashes an error, resets, commits nothing", () => {
+  const evs = [
+    ...press(0, 350), ...press(500, 850), ...press(1000, 1350), ...press(1500, 1850),
+    { type: "tick", t: 2250 }, { type: "tick", t: 3000 }
+  ];
+  const r = run(createState(), evs);
+  eq(find(r.effects, "commit"), [], "nothing may be committed");
+  const errs = find(r.effects, "error");
+  eq(errs, [{ type: "error", pads: ["T", "M", "O"] }]);
+  eq(find(r.effects, "lightPath").pop(), { type: "lightPath", pads: ["T", "M", "O"] });
+  eq(r.state.mode, "IDLE");
+  eq(r.state.path, "");
+});
+
+test("error enters ERROR_FLASH with a 400 ms deadline, then clears to IDLE", () => {
+  let r = run(createState(), [...press(0, 350), ...press(500, 850), ...press(1000, 1350), ...press(1500, 1850)]);
+  eq(r.state.mode, "ERROR_FLASH");
+  eq(r.deadline, { kind: "errorEnd", at: 1850 + 400 });
+  r = run(r.state, [{ type: "tick", t: 2249 }]);
+  eq(r.effects, []);
+  r = run(r.state, [{ type: "tick", t: 2250 }]);
+  eq(r.effects, [{ type: "clearPads" }]);
+  eq(r.state.mode, "IDLE");
+  eq(r.deadline, null);
+});
+
+test("five dots (.....) and ..-- are invalid too", () => {
+  const five = run(createState(), [...press(0, 100), ...press(200, 300), ...press(400, 500), ...press(600, 700), ...press(800, 900)]);
+  eq(five.state.mode, "ERROR_FLASH");
+  eq(find(five.effects, "error"), [{ type: "error", pads: ["E", "I", "S", "H"] }]);
+  const bad = run(createState(), [...press(0, 100), ...press(200, 300), ...press(400, 800), ...press(900, 1300)]);
+  eq(bad.state.mode, "ERROR_FLASH");
+  eq(find(bad.effects, "error")[0].pads, ["E", "I", "U"]);
+});
+
+test("keying during the error flash starts a fresh letter", () => {
+  let r = run(createState(), [...press(0, 350), ...press(500, 850), ...press(1000, 1350), ...press(1500, 1850)]);
+  r = run(r.state, [{ type: "keyDown", t: 1900 }, { type: "keyUp", t: 2000 }]);
+  eq(types(r.effects), ["clearPads", "rootPulse", "toneOn", "toneOff", "lightPath"]);
+  eq(r.state.path, ".");
+});
+
+/* ================================================================== */
+group("Decoder — power and playback gating (§5.6, §5.5)");
+
+test("power off: pads clear, tone stops, keys are ignored, no deadline", () => {
+  let r = run(createState(), [{ type: "keyDown", t: 0 }]);
+  r = run(r.state, [{ type: "power", on: false, t: 10 }]);
+  eq(types(r.effects), ["toneOff", "clearPads"]);
+  eq(r.state.mode, "OFF");
+  r = run(r.state, [...press(100, 500), { type: "tick", t: 2000 }]);
+  eq(r.effects, []);
+  eq(r.state.mode, "OFF");
+  eq(r.deadline, null);
+});
+
+test("power on restores IDLE", () => {
+  const r = run(createState(false), [{ type: "power", on: true, t: 0 }]);
+  eq(r.state.mode, "IDLE");
+  eq(r.state.powered, true);
+});
+
+test("PLAYBACK ignores user keys; playbackEnd returns to IDLE", () => {
+  let r = run(createState(), [{ type: "playbackStart", t: 0 }]);
+  eq(r.state.mode, "PLAYBACK");
+  r = run(r.state, press(10, 200));
+  eq(r.effects, []);
+  eq(r.state.mode, "PLAYBACK");
+  r = run(r.state, [{ type: "playbackEnd", t: 300 }]);
+  eq(r.state.mode, "IDLE");
+});
+
+test("reset mid-letter clears everything", () => {
+  let r = run(createState(), press(0, 100));
+  r = run(r.state, [{ type: "reset", t: 200 }]);
+  eq(types(r.effects), ["toneOff", "clearPads"]);
+  eq(r.state.path, "");
+  eq(r.deadline, null);
+});
+
+test("reduce never mutates its input state", () => {
+  const s = createState();
+  const frozen = Object.freeze(Object.assign({}, s));
+  reduce(frozen, { type: "keyDown", t: 0 }, T);
+  eq(frozen.mode, "IDLE");
+});
+
+/* ================================================================== */
+group("Recording cap (§5.5, acceptance #9)");
+
+test("caps at 200 presses; the 201st is rejected", () => {
+  let presses = [];
+  let full = false;
+  for (let i = 0; i < 200; i++) {
+    const r = recordPress(presses, { downAt: i * 100, upAt: i * 100 + 50 });
+    ok(r.accepted, "press " + i + " should be accepted");
+    presses = r.presses;
+    full = r.full;
+  }
+  eq(presses.length, 200);
+  eq(full, true, "full at exactly 200");
+  const r = recordPress(presses, { downAt: 20000, upAt: 20050 });
+  eq(r.accepted, false);
+  eq(r.full, true);
+  eq(r.presses.length, 200);
+});
+
+test("caps at 60 s; a press ending after 60000 ms is rejected", () => {
+  const r = recordPress([], { downAt: 59990, upAt: 60001 });
+  eq(r.accepted, false);
+  eq(r.full, true);
+  eq(r.presses, []);
+});
+
+test("a press ending exactly at 60000 ms is kept and marks the recording full", () => {
+  const r = recordPress([], { downAt: 59900, upAt: 60000 });
+  eq(r.accepted, true);
+  eq(r.full, true);
+  eq(r.presses.length, 1);
+});
+
+test("recordPress does not mutate the input array", () => {
+  const a = [];
+  recordPress(a, { downAt: 0, upAt: 50 });
+  eq(a.length, 0);
+});
+
+test("isValidRecording accepts good data and rejects junk", () => {
+  eq(MAX_RECORD_MS, 60000); eq(MAX_PRESSES, 200);
+  ok(isValidRecording([{ downAt: 0, upAt: 50 }, { downAt: 100, upAt: 400 }]));
+  ok(!isValidRecording([]));
+  ok(!isValidRecording(null));
+  ok(!isValidRecording([{ downAt: 0, upAt: 0 }]), "zero-length press");
+  ok(!isValidRecording([{ downAt: 100, upAt: 200 }, { downAt: 150, upAt: 300 }]), "overlapping");
+  ok(!isValidRecording([{ downAt: 0, upAt: 60001 }]), "past the cap");
+});
+
+/* ================================================================== */
+group("Dash threshold (adjustable) & live hold feedback — post-SRD addition");
+
+test("default dash ratio is 2 (SRD §5.1); range 1.5–3; threshold = ratio × T", () => {
+  eq(DEFAULT_DASH_RATIO, 2); eq(MIN_DASH_RATIO, 1.5); eq(MAX_DASH_RATIO, 3);
+  eq(thresholds(150).dashMin, 300, "default");
+  eq(thresholds(150, 2.5).dashMin, 375);
+  eq(thresholds(150, 1.5).dashMin, 225);
+  eq(thresholds(100, 2.25).dashMin, 225);
+  eq(thresholds(150, 2.5).commitGap, 450, "commit / word gaps are unaffected by the ratio");
+});
+
+test("clampDashRatio clamps and falls back", () => {
+  eq(clampDashRatio(1), 1.5); eq(clampDashRatio(5), 3); eq(clampDashRatio("x"), 2); eq(clampDashRatio(2.333), 2.33);
+});
+
+test("symbolFor honours the ratio", () => {
+  eq(symbolFor(374, 150, 2.5), ".");
+  eq(symbolFor(375, 150, 2.5), "-");
+  eq(symbolFor(320, 150), "-");
+});
+
+test("the same 320 ms press is a dash at 2×T and a dot at 2.5×T", () => {
+  eq(run(createState(), press(0, 320), 150, 2).state.path, "-");
+  eq(run(createState(), press(0, 320), 150, 2.5).state.path, ".");
+});
+
+test("keyDown arms a dashReached deadline at downAt + dashMin", () => {
+  const r = reduce(createState(), { type: "keyDown", t: 100 }, 150, 2.5);
+  eq(r.deadline, { kind: "dashReached", at: 100 + 375 });
+});
+
+test("holdDash fires exactly once when the hold crosses the threshold; the release is then a dash", () => {
+  let r = run(createState(), [{ type: "keyDown", t: 0 }]);
+  eq(r.deadline, { kind: "dashReached", at: 300 });
+  r = run(r.state, [{ type: "tick", t: 299 }]);
+  eq(r.effects, []);
+  eq(r.deadline, { kind: "dashReached", at: 300 });
+  r = run(r.state, [{ type: "tick", t: 300 }]);
+  eq(r.effects, [{ type: "holdDash" }]);
+  eq(r.state.mode, "KEY_HELD");
+  eq(r.state.dashReached, true);
+  eq(r.deadline, null, "nothing more to wait for while held");
+  r = run(r.state, [{ type: "tick", t: 800 }]);
+  eq(r.effects, [], "never twice");
+  r = run(r.state, [{ type: "keyUp", t: 900 }]);
+  eq(find(r.effects, "lightPath"), [{ type: "lightPath", pads: ["T"] }]);
+});
+
+test("a dot release never sees holdDash", () => {
+  const r = run(createState(), [{ type: "keyDown", t: 0 }, { type: "tick", t: 100 }, { type: "keyUp", t: 100 }]);
+  eq(find(r.effects, "holdDash"), []);
+  eq(r.state.path, ".");
+});
+
+test("retime while held re-derives the dashReached deadline from the new T / ratio", () => {
+  let r = reduce(createState(), { type: "keyDown", t: 0 }, 150);
+  r = reduce(r.state, { type: "retime", t: 50 }, 100);
+  eq(r.deadline, { kind: "dashReached", at: 200 });
+  r = reduce(r.state, { type: "retime", t: 50 }, 150, 3);
+  eq(r.deadline, { kind: "dashReached", at: 450 });
+});
+
+test("dashReached resets on the next keyDown", () => {
+  let r = run(createState(), [{ type: "keyDown", t: 0 }, { type: "tick", t: 300 }, { type: "keyUp", t: 400 }]);
+  eq(r.state.dashReached, false);
+  r = run(r.state, [{ type: "keyDown", t: 500 }]);
+  eq(r.deadline, { kind: "dashReached", at: 800 });
+});
+
+test("reference-mode dashes (3T) are still dashes at the widest ratio", () => {
+  const p = pressesForPath("-", 150)[0];
+  eq(run(createState(), press(p.downAt, p.upAt), 150, MAX_DASH_RATIO).state.path, "-");
+});
+
+/* ================================================================== */
+group("Decoded strip — delete last letter (post-SRD addition; runs against a detached DOM node)");
+
+test("backspace removes the last letter", () => {
+  const el = document.createElement("div");
+  const s = createStrip(el, 40);
+  s.push("S"); s.push("O"); s.push("S");
+  eq(s.backspace(), true);
+  eq(s.text, "SO");
+  eq(el.textContent, "SO");
+});
+
+test("backspace takes a trailing word space away together with the letter before it", () => {
+  const s = createStrip(document.createElement("div"), 40);
+  s.push("S"); s.push("O"); s.space();
+  eq(s.text, "SO ");
+  s.backspace();
+  eq(s.text, "S");
+});
+
+test("backspace on an empty strip is a no-op and reports false", () => {
+  const s = createStrip(document.createElement("div"), 40);
+  eq(s.backspace(), false);
+  eq(s.text, "");
+});
+
+test("space() never leads or doubles; the strip keeps the last 40 characters", () => {
+  const s = createStrip(document.createElement("div"), 40);
+  s.space(); eq(s.text, "");
+  s.push("A"); s.space(); s.space(); eq(s.text, "A ");
+  for (let i = 0; i < 50; i++) s.push("X");
+  eq(s.text.length, 40);
+});
+
+test("onChange fires on every change", () => {
+  const s = createStrip(document.createElement("div"), 40);
+  let n = 0;
+  s.onChange(() => n++);
+  s.push("A"); s.space(); s.backspace(); s.clear();
+  eq(n, 4);
+});
+
+/* ================================================================== */
+group("Hints chart data (js/morse/chart.js) — post-SRD addition");
+
+test("chart letters are exactly the card's 26 letters with the same codes", () => {
+  eq(CHART_LETTERS.length, 26);
+  eq(CHART_LETTERS.map(e => e.sym).join(""), "ABCDEFGHIJKLMNOPQRSTUVWXYZ");
+  for (const e of CHART_LETTERS) eq(e.code, pathForLetter(e.sym), e.sym);
+  eq(CHART_LETTERS.slice(0, 20).pop().sym, "T", "left column ends at T");
+  eq(CHART_LETTERS.slice(20)[0].sym, "U", "right column starts at U");
+});
+
+test("ten digits, five symbols each, all different, 1–9 then 0", () => {
+  eq(DIGITS.length, 10);
+  for (const d of DIGITS) { eq(d.code.length, 5, "digit " + d.sym); ok(/^[.-]+$/.test(d.code), d.sym); }
+  eq(new Set(DIGITS.map(d => d.code)).size, 10);
+  eq(DIGITS.map(d => d.sym).join(""), "1234567890");
+  eq(DIGITS[9].code, "-----");
+});
+
+test("no code is shared between letters and digits", () => {
+  const all = [...CHART_LETTERS, ...DIGITS];
+  eq(new Set(all.map(e => e.code)).size, all.length);
+});
+
+/* ---------- summary ---------- */
+const total = passed + failed;
+banner.className = failed === 0 ? "pass" : "fail";
+banner.textContent = (failed === 0 ? "ALL GREEN — " : "FAILURES — ") + passed + " passed, " + failed + " failed, " + total + " total";
+document.title = (failed === 0 ? "✅ " : "❌ ") + passed + "/" + total + " — Morse Card tests";
+</script>
+</body>
+</html>

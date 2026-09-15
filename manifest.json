@@ -1,0 +1,19 @@
+{
+  "name": "Morse Code Trainer",
+  "short_name": "Morse Card",
+  "description": "A browser replica of the Morse Code Trainer Card Pro. Key dots and dashes, watch the decoding tree light up.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0f0f0f",
+  "theme_color": "#0f0f0f",
+  "icons": [
+    {
+      "src": "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'%3E%3Crect width='512' height='512' rx='80' fill='%230f0f0f'/%3E%3Crect x='24' y='24' width='464' height='464' rx='64' fill='none' stroke='%23c8963e' stroke-width='16'/%3E%3Ccircle cx='168' cy='256' r='72' fill='%23c8963e' stroke='%23fff' stroke-width='18'/%3E%3Crect x='268' y='196' width='176' height='120' rx='12' fill='%23c8963e' stroke='%23fff' stroke-width='18'/%3E%3C/svg%3E",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}
