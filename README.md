@@ -33,7 +33,7 @@ install.
 
 Your settings and last recording are saved in the browser, so they're still there next time.
 
-## Running it on your own computer
+## Running it on your own computer (There is no need for this since it is hosted on github)
 
 The app is plain files — no installation, no build step. Browsers won't run it straight from a
 folder, so serve it with any simple web server:
